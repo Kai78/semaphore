@@ -4,18 +4,20 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
+
 	"github.com/Masterminds/squirrel"
+	"github.com/dlclark/regexp2"
 	"github.com/go-gorp/gorp/v3"
 	_ "github.com/go-sql-driver/mysql" // imports mysql driver
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq"              // imports postgresql driver
 	"github.com/semaphoreui/semaphore/db"
 	"github.com/semaphoreui/semaphore/pkg/task_logger"
 	"github.com/semaphoreui/semaphore/util"
+	_ "github.com/sijms/go-ora/v2" // imports oracle driver
 	log "github.com/sirupsen/logrus"
-	"reflect"
-	"regexp"
-	"strconv"
-	"strings"
 )
 
 type SqlDb struct {
@@ -78,7 +80,7 @@ func handleRollbackError(err error) {
 }
 
 var (
-	identifierQuoteRE = regexp.MustCompile("`")
+	identifierQuoteRE = regexp2.MustCompile("`", regexp2.IgnoreCase|regexp2.Multiline)
 )
 
 // validateMutationResult checks the success of the update query
@@ -105,6 +107,19 @@ func (d *SqlDb) prepareQueryWithDialect(query string, dialect gorp.Dialect) stri
 				argNum++
 			case '`':
 				queryBuilder.WriteRune('"')
+			default:
+				queryBuilder.WriteRune(r)
+			}
+		}
+		query = queryBuilder.String()
+	case gorp.OracleDialect:
+		var queryBuilder strings.Builder
+		argNum := 1
+		for _, r := range query {
+			switch r {
+			case '?':
+				queryBuilder.WriteString(":" + strconv.Itoa(argNum))
+				argNum++
 			default:
 				queryBuilder.WriteRune(r)
 			}
@@ -167,7 +182,7 @@ func connect() (*sql.DB, error) {
 		return nil, err
 	}
 
-	connectionString, err := cfg.GetConnectionString(true)
+	connectionString, err := cfg.GetConnectionString(true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +201,7 @@ func createDb() error {
 		return nil
 	}
 
-	connectionString, err := cfg.GetConnectionString(false)
+	connectionString, err := cfg.GetConnectionString(false, true)
 	if err != nil {
 		return err
 	}
@@ -369,6 +384,8 @@ func (d *SqlDb) Connect(_ string) {
 		dialect = gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
 	case util.DbDriverPostgres:
 		dialect = gorp.PostgresDialect{}
+	case util.DbDriverOracle:
+		dialect = gorp.OracleDialect{}
 	}
 
 	d.sql = &gorp.DbMap{Db: sqlDb, Dialect: dialect}
@@ -490,7 +507,8 @@ func (d *SqlDb) Sql() *gorp.DbMap {
 }
 
 func (d *SqlDb) IsInitialized() (bool, error) {
-	_, err := d.sql.SelectInt(d.PrepareQuery("select count(1) from migrations"))
+	val, err := d.sql.SelectInt(d.PrepareQuery("select count(1) from migrations"))
+	print(val)
 	return err == nil, nil
 }
 

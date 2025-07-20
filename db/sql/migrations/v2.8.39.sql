@@ -1,7 +1,8 @@
-alter table `task`
-    add constraint `task_build_task_id_fk_y38rt`
-        foreign key (`build_task_id`) references `task` (`id`)
-            on delete set null;
+-- This constraint already gets added in the sql migration file 2.8.1
+-- alter table `task`
+--    add constraint `task_build_task_id_fk_y38rt`
+--        foreign key (`build_task_id`) references `task` (`id`)
+--            on delete set null;
 
 
 create table `project__template_backup_385025846` (

@@ -2,25 +2,35 @@ package sql
 
 import (
 	"fmt"
-	"github.com/go-gorp/gorp/v3"
 	"path"
-	"regexp"
 	"strings"
-	"time"
 
+	"github.com/dlclark/regexp2"
+	"github.com/go-gorp/gorp/v3"
 	"github.com/semaphoreui/semaphore/db"
 	log "github.com/sirupsen/logrus"
 )
 
 var (
-	autoIncrementRE  = regexp.MustCompile(`(?i)\bautoincrement\b`)
-	serialRE         = regexp.MustCompile(`(?i)\binteger primary key autoincrement\b`)
-	dateTimeTypeRE   = regexp.MustCompile(`(?i)\bdatetime\b`)
-	tinyintRE        = regexp.MustCompile(`(?i)\btinyint\b`)
-	longtextRE       = regexp.MustCompile(`(?i)\blongtext\b`)
-	ifExistsRE       = regexp.MustCompile(`(?i)\bif exists\b`)
-	changeRE         = regexp.MustCompile(`^alter table \x60(\w+)\x60 change \x60(\w+)\x60 \x60(\w+)\x60 ([\w\(\)]+)( autoincrement)?( not null)?$`)
-	dropForeignKeyRE = regexp.MustCompile(`(?i)\bdrop foreign key\b`)
+	autoIncrementRE        = regexp2.MustCompile(`\bautoincrement\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	serialRE               = regexp2.MustCompile(`\bint(?:eger)* primary key autoincrement\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	dateTimeTypeRE         = regexp2.MustCompile(`\bdatetime\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	tinyintRE              = regexp2.MustCompile(`\btinyint\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	numberRE               = regexp2.MustCompile(`\b(?:big)?int(?:eger)?\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	booleanRE              = regexp2.MustCompile(`\bbool(?:ean)*\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	falseRE                = regexp2.MustCompile(`\bfalse\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	trueRE                 = regexp2.MustCompile(`\btrue\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	longtextRE             = regexp2.MustCompile(`\b(long)*text\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	ifExistsRE             = regexp2.MustCompile(`\bif exists\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	changeRE               = regexp2.MustCompile(`^alter table "(\w+)" change "(\w+)" "(\w+)" ([\w\(\)]+)( autoincrement)?( not null)?$`, regexp2.IgnoreCase|regexp2.Multiline)
+	columnRE               = regexp2.MustCompile(`\b(add|modify) column\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	tableNameRE            = regexp2.MustCompile(`\b((?:create|alter|drop)\s+(?:table|index\s+\x60?\w+\x60?\s+on)|from|join|into|update|delete\s+from|references)\s+(\x60?\x22?)([a-z_][a-z0-9_]*)\2`, regexp2.IgnoreCase|regexp2.Multiline)
+	quotedWordsRE          = regexp2.MustCompile(`\x60(\b\w+\b)\x60`, regexp2.IgnoreCase|regexp2.Multiline)
+	dropForeignKeyRE       = regexp2.MustCompile(`\bdrop foreign key\b`, regexp2.IgnoreCase|regexp2.Multiline)
+	implicitBooleanCheckRE = regexp2.MustCompile(`\bWHERE\s+\x60([a-z_][a-z0-9_]*)\x60(\s*(;|\z))`, regexp2.IgnoreCase|regexp2.Multiline)
+	nonPrintableRE         = regexp2.MustCompile(`[\r\n\t]+`, regexp2.IgnoreCase|regexp2.Multiline)
+	semicoloumnRE          = regexp2.MustCompile(";", regexp2.Multiline)
+	datatypeWithDefaultRE  = regexp2.MustCompile(`(NOT\s+NULL|NULL)\s+(DEFAULT\s+(?:'[^']*'|[^\s,()]+))|(DEFAULT\s+(?:'[^']*'|[^\s,()]+))\s+(NOT\s+NULL|NULL)`, regexp2.IgnoreCase|regexp2.Multiline)
 )
 
 // getVersionPath is the humanoid version with the file format appended
@@ -49,173 +59,174 @@ func getVersionSQL(name string) (queries []string) {
 
 // prepareMigration converts migration SQLite-query to current dialect.
 // Supported MySQL and Postgres dialects.
-func (d *SqlDb) prepareMigration(query string) string {
-	switch d.sql.Dialect.(type) {
+func (d *SqlDb) prepareMigration(query string) []string {
+	query, _ = nonPrintableRE.Replace(query, " ", -1, -1)
+	var queries []string
+
+	switch dialect := d.sql.Dialect.(type) {
 	case gorp.MySQLDialect:
-		query = autoIncrementRE.ReplaceAllString(query, "auto_increment")
-		query = ifExistsRE.ReplaceAllString(query, "")
+		queries = append(queries, prepareMySQLMigration(query))
+	case gorp.OracleDialect:
+		queries = append(queries, prepareOracleMigration(query)...)
 	case gorp.PostgresDialect:
-		m := changeRE.FindStringSubmatch(query)
-		if m != nil {
-			tableName := m[1]
-			oldColumnName := m[2]
-			newColumnName := m[3]
-			columnType := m[4]
-			//autoincrement := m[5] != ""
-			columnNotNull := m[6] != ""
+		queries = append(queries, preparePostgresMigration(query)...)
+	default:
+		log.Warnf("Unsupported SQL dialect: %T", dialect)
+	}
 
-			var queries []string
-			queries = append(queries,
-				"alter table `"+tableName+"` alter column `"+oldColumnName+"` type "+columnType)
+	return queries
+}
 
-			if columnNotNull {
-				queries = append(queries,
-					"alter table `"+tableName+"` alter column `"+oldColumnName+"` set not null")
-			} else {
-				queries = append(queries,
-					"alter table `"+tableName+"` alter column `"+oldColumnName+"` drop not null")
-			}
+func prepareMySQLMigration(query string) string {
+	query, _ = autoIncrementRE.Replace(query, "auto_increment", -1, -1)
+	query, _ = ifExistsRE.Replace(query, "", -1, -1)
+	return query
+}
 
-			if oldColumnName != newColumnName {
-				queries = append(queries,
-					"alter table `"+tableName+"` rename column `"+oldColumnName+"` to `"+newColumnName+"`")
-			}
+func prepareOracleMigration(query string) []string {
+	var queries []string
+	query, _ = semicoloumnRE.Replace(query, "", -1, -1)
 
-			query = strings.Join(queries, "; ")
+	// Handle "if exists" logic
+	if m, _ := ifExistsRE.FindStringMatch(query); m != nil {
+		query, _ = ifExistsRE.Replace(query, "", -1, -1)
+		query = strings.TrimSpace(query)
+		query = "begin execute immediate '" + query + "'; exception when others then null; end;"
+	}
+
+	// Replace common patterns
+	query = replacePatterns(query, map[*regexp2.Regexp]string{
+		trueRE:                 "1",
+		falseRE:                "0",
+		datatypeWithDefaultRE:  "${2} ${1}",
+		dateTimeTypeRE:         "timestamp",
+		columnRE:               "${1}",
+		longtextRE:             "clob",
+		serialRE:               "number generated by default as identity primary key",
+		booleanRE:              "number(1,0)",
+		tinyintRE:              "number(5)",
+		numberRE:               "number",
+		dropForeignKeyRE:       "drop constraint",
+		implicitBooleanCheckRE: "where \x60${1}\x60 = 1",
+	})
+
+	// Handle table name quoting
+	query = processTableNames(query)
+
+	// Handle quoted words
+	query = processQuotedWords(query)
+
+	// Handle column changes
+	queries = append(queries, processColumnChanges(query)...)
+
+	return queries
+}
+
+func preparePostgresMigration(query string) []string {
+	var queries []string
+
+	// Handle column changes
+	if m, _ := changeRE.FindStringMatch(query); m != nil {
+		grps := m.Groups()
+		tableName := strings.ToUpper(grps[1].Captures[0].String())
+		oldColumnName := strings.ToUpper(grps[2].Captures[0].String())
+		newColumnName := strings.ToUpper(grps[3].Captures[0].String())
+		columnType := grps[4].Captures[0].String()
+		columnNotNull := len(grps[6].Captures) > 0 && grps[6].Captures[0].String() != ""
+
+		queries = append(queries, fmt.Sprintf("alter table `%s` alter column `%s` type %s", tableName, oldColumnName, columnType))
+
+		if columnNotNull {
+			queries = append(queries, fmt.Sprintf("alter table `%s` alter column `%s` set not null", tableName, oldColumnName))
+		} else {
+			queries = append(queries, fmt.Sprintf("alter table `%s` alter column `%s` drop not null", tableName, oldColumnName))
 		}
 
-		query = dateTimeTypeRE.ReplaceAllString(query, "timestamp")
-		query = tinyintRE.ReplaceAllString(query, "smallint")
-		query = longtextRE.ReplaceAllString(query, "text")
-		query = serialRE.ReplaceAllString(query, "serial primary key")
-		query = dropForeignKeyRE.ReplaceAllString(query, "drop constraint")
-		query = identifierQuoteRE.ReplaceAllString(query, "\"")
+		if oldColumnName != newColumnName {
+			queries = append(queries, fmt.Sprintf("alter table `%s` rename column `%s` to `%s`", tableName, oldColumnName, newColumnName))
+		}
+	}
+
+	// Replace common patterns
+	query = replacePatterns(query, map[*regexp2.Regexp]string{
+		dateTimeTypeRE:    "timestamp",
+		tinyintRE:         "smallint",
+		longtextRE:        "text",
+		serialRE:          "serial primary key",
+		dropForeignKeyRE:  "drop constraint",
+		identifierQuoteRE: "\"",
+	})
+
+	queries = append(queries, query)
+	return queries
+}
+
+func replacePatterns(query string, patterns map[*regexp2.Regexp]string) string {
+	for re, replacement := range patterns {
+		query, _ = re.Replace(query, replacement, -1, -1)
 	}
 	return query
 }
 
-// IsMigrationApplied queries the database to see if a migration table with this version id exists already
-func (d *SqlDb) IsMigrationApplied(migration db.Migration) (bool, error) {
-	initialized, err := d.IsInitialized()
+func processTableNames(query string) string {
+	match, err := tableNameRE.FindStringMatch(query)
+	sb := strings.Builder{}
+	pos := 0
 
-	if err != nil {
-		return false, err
+	for match != nil && err == nil {
+		sb.WriteString(query[pos:match.Index])
+
+		keyword := match.GroupByNumber(1).String()
+		tableName := strings.ToUpper(match.GroupByNumber(3).String())
+
+		// Preserve keyword, add quoted table name
+		sb.WriteString(keyword + ` "` + tableName + `"`)
+
+		pos = match.Index + match.Length
+		match, err = tableNameRE.FindNextMatch(match)
 	}
-
-	if !initialized {
-		return false, nil
-	}
-
-	exists, err := d.sql.SelectInt(
-		d.PrepareQuery("select count(1) as ex from migrations where version = ?"),
-		migration.Version)
-
-	if err != nil {
-		return false, err
-	}
-
-	return exists > 0, nil
+	sb.WriteString(query[pos:])
+	return sb.String()
 }
 
-// ApplyMigration runs executes a database migration
-func (d *SqlDb) ApplyMigration(migration db.Migration) error {
-	initialized, err := d.IsInitialized()
+func processQuotedWords(query string) string {
+	match, err := quotedWordsRE.FindStringMatch(query)
+	sb := strings.Builder{}
+	pos := 0
 
-	if err != nil {
-		return err
+	for match != nil && err == nil {
+		sb.WriteString(query[pos:match.Index])
+
+		wordToQuote := match.GroupByNumber(1).String()
+		sb.WriteString(`"` + strings.ToUpper(wordToQuote) + `"`)
+
+		pos = match.Index + match.Length
+		match, err = quotedWordsRE.FindNextMatch(match)
 	}
-
-	if !initialized {
-		fmt.Println("Creating migrations table")
-		query := d.prepareMigration(initialSQL)
-		if query == "" {
-			return nil
-		}
-		_, err = d.exec(query)
-		if err != nil {
-			return err
-		}
-	}
-
-	tx, err := d.sql.Begin()
-	if err != nil {
-		return err
-	}
-
-	switch migration.Version {
-	case "2.10.24":
-		err = migration_2_10_24{db: d}.PreApply(tx)
-	}
-
-	if err != nil {
-		handleRollbackError(tx.Rollback())
-		return err
-	}
-
-	queries := getVersionSQL(getVersionPath(migration))
-	for i, query := range queries {
-		fmt.Printf("\r [%d/%d]", i+1, len(query))
-
-		if len(query) == 0 {
-			continue
-		}
-
-		q := d.prepareMigration(query)
-		if q == "" {
-			continue
-		}
-
-		_, err = tx.Exec(q)
-		if err != nil {
-			handleRollbackError(tx.Rollback())
-			log.Warnf("\n ERR! Query: %s\n\n", q)
-			log.Fatalf(err.Error())
-			return err
-		}
-	}
-
-	switch migration.Version {
-	case "2.8.26":
-		err = migration_2_8_26{db: d}.PostApply(tx)
-	case "2.8.42":
-		err = migration_2_8_42{db: d}.PostApply(tx)
-	}
-
-	if err != nil {
-		handleRollbackError(tx.Rollback())
-		return err
-	}
-
-	_, err = tx.Exec(d.PrepareQuery("insert into migrations(version, upgraded_date) values (?, ?)"), migration.Version, time.Now())
-	if err != nil {
-		handleRollbackError(tx.Rollback())
-		return err
-	}
-
-	fmt.Println()
-
-	return tx.Commit()
+	sb.WriteString(query[pos:])
+	return sb.String()
 }
 
-// TryRollbackMigration attempts to rollback the database to an earlier version if a rollback exists
-func (d *SqlDb) TryRollbackMigration(version db.Migration) {
-	data, _ := dbAssets.ReadFile(getVersionErrPath(version))
-	if len(data) == 0 {
-		fmt.Println("Rollback SQL does not exist.")
-		fmt.Println()
-		return
-	}
+func processColumnChanges(query string) []string {
+	var queries []string
+	if m, _ := changeRE.FindStringMatch(query); m != nil {
+		grps := m.Groups()
+		tableName := strings.ToUpper(grps[1].Captures[0].String())
+		oldColumnName := strings.ToUpper(grps[2].Captures[0].String())
+		newColumnName := strings.ToUpper(grps[3].Captures[0].String())
+		columnType := grps[4].Captures[0].String()
+		columnNotNull := len(grps[6].Captures) > 0 && grps[6].Captures[0].String() != ""
 
-	queries := getVersionSQL(getVersionErrPath(version))
-	for _, query := range queries {
-		fmt.Printf(" [ROLLBACK] > %v\n", query)
-		q := d.prepareMigration(query)
-		if q == "" {
-			continue
+		queries = append(queries, fmt.Sprintf("alter table \"%s\" modify \"%s\" %s", tableName, oldColumnName, columnType))
+		if columnNotNull {
+			queries = append(queries, fmt.Sprintf("begin execute immediate 'alter table \"%s\" modify \"%s\" not null'; exception when others then null; end;", tableName, oldColumnName))
 		}
-		if _, err := d.exec(q); err != nil {
-			fmt.Println(" [ROLLBACK] - Stopping")
-			return
+
+		if oldColumnName != newColumnName {
+			queries = append(queries, fmt.Sprintf("alter table \"%s\" rename column \"%s\" to \"%s\"", tableName, oldColumnName, newColumnName))
 		}
+	} else {
+		queries = append(queries, query)
 	}
+	return queries
 }

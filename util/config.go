@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/crypto/bcrypt"
 	"io"
 	"net/url"
 	"os"
@@ -19,6 +18,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/google/go-github/github"
 	"github.com/gorilla/securecookie"
@@ -32,6 +33,7 @@ var WebHostURL *url.URL
 
 const (
 	DbDriverMySQL    = "mysql"
+	DbDriverOracle   = "oracle"
 	DbDriverBolt     = "bolt"
 	DbDriverPostgres = "postgres"
 )
@@ -39,11 +41,14 @@ const (
 type DbConfig struct {
 	Dialect string `json:"-"`
 
-	Hostname string            `json:"host,omitempty" env:"SEMAPHORE_DB_HOST" default:"0.0.0.0"`
-	Username string            `json:"user,omitempty" env:"SEMAPHORE_DB_USER"`
-	Password string            `json:"pass,omitempty" env:"SEMAPHORE_DB_PASS"`
-	DbName   string            `json:"name,omitempty" env:"SEMAPHORE_DB" default:"semaphore"`
-	Options  map[string]string `json:"options,omitempty" env:"SEMAPHORE_DB_OPTIONS"`
+	Hostname      string            `json:"host,omitempty" env:"SEMAPHORE_DB_HOST" default:"0.0.0.0"`
+	Username      string            `json:"user,omitempty" env:"SEMAPHORE_DB_USER"`
+	AdminPassword string            `json:"adminpass,omitempty" env:"SEMAPHORE_DB_ADMIN_PASS"`
+	Password      string            `json:"pass,omitempty" env:"SEMAPHORE_DB_PASS"`
+	DbName        string            `json:"name,omitempty" env:"SEMAPHORE_DB" default:"semaphore"`
+	DbSid         string            `json:"dbsid,omitempty" env:"SEMAPHORE_DB_SID" default:"semaphore"`
+	DbPort        string            `json:"port,omitempty" env:"SEMAPHORE_DB_PORT"`
+	Options       map[string]string `json:"options,omitempty" env:"SEMAPHORE_DB_OPTIONS"`
 }
 
 type LdapMappings struct {
@@ -132,11 +137,12 @@ type AuthConfig struct {
 
 // ConfigType mapping between Config and the json file that sets it
 type ConfigType struct {
+	Oracle   *DbConfig `json:"oracle,omitempty"`
 	MySQL    *DbConfig `json:"mysql,omitempty"`
 	BoltDb   *DbConfig `json:"bolt,omitempty"`
 	Postgres *DbConfig `json:"postgres,omitempty"`
 
-	Dialect string `json:"dialect,omitempty" default:"bolt" rule:"^mysql|bolt|postgres$" env:"SEMAPHORE_DB_DIALECT"`
+	Dialect string `json:"dialect,omitempty" default:"bolt" rule:"^mysql|bolt|postgres|oracle$" env:"SEMAPHORE_DB_DIALECT"`
 
 	// Format `:port_num` eg, :3000
 	// if : is missing it will be corrected
@@ -697,6 +703,30 @@ func (d *DbConfig) GetPassword() string {
 	return d.Password
 }
 
+func (d *DbConfig) GetAdminPassword() string {
+	password := os.Getenv("SEMAPHORE_DB_ADMIN_PASS")
+	if password != "" {
+		return password
+	}
+	return d.AdminPassword
+}
+
+func (d *DbConfig) GetPort() string {
+	port := os.Getenv("SEMAPHORE_DB_PORT")
+	if port != "" {
+		return port
+	}
+	return d.DbPort
+}
+
+func (d *DbConfig) GetDbSid() string {
+	dbsid := os.Getenv("SEMAPHORE_DB_SID")
+	if dbsid != "" {
+		return dbsid
+	}
+	return d.DbSid
+}
+
 func (d *DbConfig) GetHostname() string {
 	hostname := os.Getenv("SEMAPHORE_DB_HOST")
 	if hostname != "" {
@@ -715,16 +745,23 @@ func (d *DbConfig) GetHostname() string {
 // Returns:
 // - connectionString: the constructed database connection string.
 // - err: an error if the dialect is unsupported.
-func (d *DbConfig) GetConnectionString(includeDbName bool) (connectionString string, err error) {
+func (d *DbConfig) GetConnectionString(includeDbName bool, needAdmin bool) (connectionString string, err error) {
 	dbName := d.GetDbName()
 	dbUser := d.GetUsername()
 	dbPass := d.GetPassword()
+	dbSid := d.GetDbSid()
+	dbAdminPass := d.GetAdminPassword()
 	dbHost := d.GetHostname()
+	dbPort := d.GetPort()
 
 	switch d.Dialect {
 	case DbDriverBolt:
 		connectionString = dbHost
 	case DbDriverMySQL:
+		if needAdmin {
+			dbUser = "root"
+			dbPass = dbAdminPass
+		}
 		if includeDbName {
 			connectionString = fmt.Sprintf(
 				"%s:%s@tcp(%s)/%s",
@@ -734,10 +771,12 @@ func (d *DbConfig) GetConnectionString(includeDbName bool) (connectionString str
 				dbName)
 		} else {
 			connectionString = fmt.Sprintf(
-				"%s:%s@tcp(%s)/",
+				"%s:%s@tcp(%s:%s)/",
 				dbUser,
 				dbPass,
-				dbHost)
+				dbHost,
+				dbPort,
+			)
 		}
 		options := map[string]string{
 			"parseTime":         "true",
@@ -748,20 +787,42 @@ func (d *DbConfig) GetConnectionString(includeDbName bool) (connectionString str
 		}
 		connectionString += mapToQueryString(options)
 	case DbDriverPostgres:
+		if needAdmin {
+			dbUser = "postgres"
+			dbPass = dbAdminPass
+		}
 		if includeDbName {
 			connectionString = fmt.Sprintf(
-				"postgres://%s:%s@%s/%s",
+				"postgres://%s:%s@%s:%s/%s",
 				dbUser,
 				url.QueryEscape(dbPass),
 				dbHost,
+				dbPort,
 				dbName)
 		} else {
 			connectionString = fmt.Sprintf(
-				"postgres://%s:%s@%s/postgres",
+				"postgres://%s:%s@%s:%s/postgres",
 				dbUser,
 				url.QueryEscape(dbPass),
-				dbHost)
+				dbHost,
+				dbPort,
+			)
 		}
+		connectionString += mapToQueryString(d.Options)
+	case DbDriverOracle:
+		if needAdmin {
+			dbUser = "system"
+			dbName = dbSid
+			dbPass = dbAdminPass
+		}
+		connectionString = fmt.Sprintf(
+			"oracle://%s:%s@%s:%s/%s",
+			dbUser,
+			url.QueryEscape(dbPass),
+			dbHost,
+			dbPort,
+			dbName,
+		)
 		connectionString += mapToQueryString(d.Options)
 	default:
 		err = fmt.Errorf("unsupported database driver: %s", d.Dialect)
@@ -787,6 +848,8 @@ func (conf *ConfigType) PrintDbInfo() {
 		fmt.Printf("BoltDB %v\n", conf.BoltDb.GetHostname())
 	case DbDriverPostgres:
 		fmt.Printf("Postgres %v@%v %v\n", conf.Postgres.GetUsername(), conf.Postgres.GetHostname(), conf.Postgres.GetDbName())
+	case DbDriverOracle:
+		fmt.Printf("Oracle %v@%v %v\n", conf.Oracle.GetUsername(), conf.Oracle.GetHostname(), conf.Oracle.GetDbName())
 	default:
 		panic(fmt.Errorf("database configuration not found"))
 	}
@@ -795,6 +858,8 @@ func (conf *ConfigType) PrintDbInfo() {
 func (conf *ConfigType) GetDialect() (dialect string, err error) {
 	if conf.Dialect == "" {
 		switch {
+		case conf.Oracle.IsPresent():
+			dialect = DbDriverOracle
 		case conf.MySQL.IsPresent():
 			dialect = DbDriverMySQL
 		case conf.BoltDb.IsPresent():
@@ -826,6 +891,8 @@ func (conf *ConfigType) GetDBConfig() (dbConfig DbConfig, err error) {
 		dbConfig = *conf.Postgres
 	case DbDriverMySQL:
 		dbConfig = *conf.MySQL
+	case DbDriverOracle:
+		dbConfig = *conf.Oracle
 	default:
 		err = errors.New("database configuration not found")
 	}

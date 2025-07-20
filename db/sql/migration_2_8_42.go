@@ -14,6 +14,10 @@ func (m migration_2_8_42) PostApply(tx *gorp.Transaction) error {
 		_, err := tx.Exec(
 			m.db.PrepareQuery("alter table `task` drop constraint if exists `task_build_task_id_fkey`"))
 		return err
+	case gorp.OracleDialect:
+		_, err := tx.Exec(
+			m.db.PrepareQuery("begin execute immediate 'alter table task drop constraint task_build_task_id_fkey'; exception when others then null; end;"))
+		return err
 	}
 	return nil
 }

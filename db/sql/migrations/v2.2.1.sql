@@ -2,7 +2,7 @@ alter table task__output rename to task__output_backup;
 
 create table task__output
 (
-    id integer primary key autoincrement,
+    id int primary key autoincrement,
     task_id int not null,
     task varchar(255) not null,
     time datetime not null,

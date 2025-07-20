@@ -14,6 +14,10 @@ func (m migration_2_10_24) PreApply(tx *gorp.Transaction) error {
 		_, err := tx.Exec(
 			m.db.PrepareQuery("alter table `project__template` drop constraint if exists `project__template_vault_key_id_fkey`"))
 		return err
+	case gorp.OracleDialect:
+		_, err := tx.Exec(
+			m.db.PrepareQuery("begin execute immediate 'alter table project__template drop constraint project__template_vault_key_id_fkey'; exception when others then null; end;"))
+		return err
 	}
 	return nil
 }
