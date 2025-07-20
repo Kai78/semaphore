@@ -144,7 +144,7 @@ func (b *BackupDB) load(projectID int, store db.Store) (err error) {
 		return
 	}
 
-	b.keys, err = store.GetAccessKeys(projectID, db.RetrieveQueryParams{})
+	b.keys, err = store.GetAccessKeys(projectID, db.GetAccessKeyOptions{}, db.RetrieveQueryParams{})
 	if err != nil {
 		return
 	}
@@ -405,7 +405,7 @@ func (b *BackupFormat) Marshal() (res string, err error) {
 
 func (b *BackupFormat) Unmarshal(res string) (err error) {
 	// Parse the JSON data into a map
-	var jsonData interface{}
+	var jsonData any
 	if err = json.Unmarshal([]byte(res), &jsonData); err != nil {
 		return
 	}

@@ -1,8 +1,7 @@
 <template>
   <EditDialog
       v-if="isAppsLoaded"
-      :max-width="1200"
-      :min-content-height="457"
+      :max-width="dialogWidth"
       v-model="dialog"
       :save-button-text="itemId === 'new' ? $t('create') : $t('save')"
       :icon="getAppIcon(itemApp)"
@@ -22,25 +21,14 @@
           :need-reset="needReset"
           :source-item-id="sourceItemId"
           :app="itemApp"
-          @resize="onFormResize"
+          :premium-features="premiumFeatures"
+          :task-type="taskType"
       />
     </template>
   </EditDialog>
 </template>
 
 <style lang="scss">
-.EditTemplateDialog {
-  width: auto;
-  .v-card__text {
-    overflow-x: auto;
-  }
-}
-
-@media #{map-get($display-breakpoints, 'sm-and-down')} {
-  .EditTemplateDialog {
-    width: auto !important;
-  }
-}
 </style>
 
 <script>
@@ -63,6 +51,8 @@ export default {
     projectId: Number,
     itemId: [String, Number],
     sourceItemId: Number,
+    premiumFeatures: Object,
+    taskType: String,
   },
 
   data() {
@@ -70,6 +60,16 @@ export default {
       id: Math.round(Math.random() * 1000000),
       dialog: false,
     };
+  },
+
+  computed: {
+    dialogWidth() {
+      if (['ansible', 'terraform', 'tofu'].includes(this.itemApp)) {
+        return 1200;
+      }
+
+      return 800;
+    },
   },
 
   watch: {
@@ -83,11 +83,6 @@ export default {
   },
 
   methods: {
-    onFormResize(e) {
-      const contentEl = document.querySelector(`.EditTemplateDialog--${this.id}`);
-      contentEl.style.width = `${e.width + 50}px`;
-    },
-
     onSave(e) {
       this.$emit('save', e);
     },

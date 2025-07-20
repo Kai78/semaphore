@@ -1,9 +1,9 @@
 <template>
-  <div class="pb-4">
+  <div class="pb-6" style="margin-top: -10px;">
     <v-dialog
       v-model="editDialog"
       hide-overlay
-      width="300"
+      width="400"
     >
       <v-card :color="$vuetify.theme.dark ? '#212121' : 'white'">
         <v-card-title></v-card-title>
@@ -24,6 +24,8 @@
               v-model.trim="editedVar.name"
               :rules="[(v) => !!v || $t('arg_required')]"
               required
+              outlined
+              dense
             />
 
             <div class="text-right mt-2">
@@ -56,24 +58,28 @@
       </v-card>
     </v-dialog>
     <fieldset style="padding: 0 10px 2px 10px;
-                     border: 1px solid rgba(0, 0, 0, 0.38);
-                     border-radius: 4px;
+                        border-width: 1px;
+                        border-color: rgba(133, 133, 133, 0.4);
+                        background-color: rgba(133, 133, 133, 0.1);
+                     border-radius: 8px;
                      font-size: 12px;"
-              :style="{
-                       'border-color': $vuetify.theme.dark ?
-                         'rgba(200, 200, 200, 0.38)' :
-                         'rgba(0, 0, 0, 0.38)'
-                     }">
+    >
       <legend style="padding: 0 3px;">{{ title || $t('Args') }}</legend>
       <v-chip-group column style="margin-top: -4px;">
         <v-chip
           v-for="(v, i) in modifiedVars"
           close
           @click:close="deleteVar(i)"
-          :key="v.name"
+          :key="i"
           @click="editVar(i)"
         >
-          {{ v.name }}
+          <div
+            style="
+              max-width: 200px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            "
+          >{{ v.name }}</div>
         </v-chip>
         <v-chip @click="editVar(null)">
           + <span
@@ -99,11 +105,12 @@ export default {
   watch: {
     vars(val) {
       this.var = val || [];
+      this.fillModifiedVars();
     },
   },
 
   created() {
-    this.modifiedVars = (this.vars || []).map((v) => ({ name: v }));
+    this.fillModifiedVars();
   },
 
   data() {
@@ -117,6 +124,10 @@ export default {
     };
   },
   methods: {
+    fillModifiedVars() {
+      this.modifiedVars = (this.vars || []).map((v) => ({ name: v }));
+    },
+
     addEditedVarValue() {
       this.editedValues.push({
         name: '',

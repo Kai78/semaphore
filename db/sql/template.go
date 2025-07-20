@@ -1,7 +1,6 @@
 package sql
 
 import (
-	"database/sql"
 	"encoding/json"
 
 	"github.com/Masterminds/squirrel"
@@ -21,12 +20,14 @@ func (d *SqlDb) CreateTemplate(template db.Template) (newTemplate db.Template, e
 			"project_id, inventory_id, repository_id, environment_id, name, "+
 			"playbook, arguments, allow_override_args_in_task, description, `type`, "+
 			"start_version, build_template_id, view_id, autorun, survey_vars, "+
-			"suppress_success_alerts, app, git_branch, runner_tag, task_params)"+
+			"suppress_success_alerts, app, git_branch, runner_tag, task_params, "+
+			"allow_override_branch_in_task, allow_parallel_tasks)"+
 			"values ("+
 			"?, ?, ?, ?, ?, "+
 			"?, ?, ?, ?, ?, "+
 			"?, ?, ?, ?, ?, "+
-			"?, ?, ?, ?, ?)",
+			"?, ?, ?, ?, ?,"+
+			"?, ?)",
 		template.ProjectID,
 		template.InventoryID,
 		template.RepositoryID,
@@ -50,6 +51,9 @@ func (d *SqlDb) CreateTemplate(template db.Template) (newTemplate db.Template, e
 		template.GitBranch,
 		template.RunnerTag,
 		template.TaskParams,
+
+		template.AllowOverrideBranchInTask,
+		template.AllowParallelTasks,
 	)
 
 	if err != nil {
@@ -99,7 +103,9 @@ func (d *SqlDb) UpdateTemplate(template db.Template) error {
 		"app=?, "+
 		"`git_branch`=?, "+
 		"task_params=?, "+
-		"runner_tag=? "+
+		"runner_tag=?, "+
+		"allow_override_branch_in_task=?, "+
+		"allow_parallel_tasks=? "+
 		"where id=? and project_id=?",
 		template.InventoryID,
 		template.RepositoryID,
@@ -120,6 +126,9 @@ func (d *SqlDb) UpdateTemplate(template db.Template) error {
 		template.GitBranch,
 		template.TaskParams,
 		template.RunnerTag,
+		template.AllowOverrideBranchInTask,
+		template.AllowParallelTasks,
+
 		template.ID,
 		template.ProjectID,
 	)
@@ -130,6 +139,18 @@ func (d *SqlDb) UpdateTemplate(template db.Template) error {
 	err = d.UpdateTemplateVaults(template.ProjectID, template.ID, template.Vaults)
 
 	return err
+}
+func (d *SqlDb) SetTemplateDescription(projectID int, templateID int, description string) (err error) {
+
+	_, err = d.exec("update project__template set "+
+		"description=? "+
+		"where id=? and project_id=?",
+		description,
+		templateID,
+		projectID,
+	)
+
+	return
 }
 
 func (d *SqlDb) GetTemplates(projectID int, filter db.TemplateFilter, params db.RetrieveQueryParams) (templates []db.Template, err error) {
@@ -166,6 +187,9 @@ func (d *SqlDb) GetTemplates(projectID int, filter db.TemplateFilter, params db.
 		"pt.`type`",
 		"pt.`tasks`",
 		"pt.runner_tag",
+		"pt.task_params",
+		"pt.allow_override_branch_in_task",
+		"pt.allow_parallel_tasks",
 		"(SELECT `id` FROM `task` WHERE template_id = pt.id ORDER BY `id` DESC LIMIT 1) last_task_id").
 		From("project__template pt")
 
@@ -256,7 +280,7 @@ func (d *SqlDb) GetTemplates(projectID int, filter db.TemplateFilter, params db.
 		}
 
 		if tpl.SurveyVarsJSON != nil {
-			err = json.Unmarshal([]byte(*tpl.SurveyVarsJSON), &tpl.SurveyVars)
+			err = json.Unmarshal([]byte(*tpl.SurveyVarsJSON), &template.SurveyVars)
 		}
 
 		if err != nil {
@@ -280,10 +304,6 @@ func (d *SqlDb) GetTemplate(projectID int, templateID int) (template db.Template
 		"select * from project__template where project_id=? and id=?",
 		projectID,
 		templateID)
-
-	if err == sql.ErrNoRows {
-		err = db.ErrNotFound
-	}
 
 	if err != nil {
 		return

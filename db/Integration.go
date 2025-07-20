@@ -8,10 +8,12 @@ import (
 type IntegrationAuthMethod string
 
 const (
-	IntegrationAuthNone   = ""
-	IntegrationAuthGitHub = "github"
-	IntegrationAuthToken  = "token"
-	IntegrationAuthHmac   = "hmac"
+	IntegrationAuthNone      = ""
+	IntegrationAuthGitHub    = "github"
+	IntegrationAuthToken     = "token"
+	IntegrationAuthHmac      = "hmac"
+	IntegrationAuthBitbucket = "bitbucket"
+	IntegrationAuthBasic     = "basic"
 )
 
 type IntegrationMatchType string
@@ -34,6 +36,13 @@ type IntegrationBodyDataType string
 const (
 	IntegrationBodyDataJSON   IntegrationBodyDataType = "json"
 	IntegrationBodyDataString IntegrationBodyDataType = "string"
+)
+
+type IntegrationVariableType string
+
+const (
+	IntegrationVariableEnvironment IntegrationVariableType = "environment"
+	IntegrationVariableTaskParam   IntegrationVariableType = "task"
 )
 
 type IntegrationMatcher struct {
@@ -62,6 +71,7 @@ type IntegrationExtractValue struct {
 	BodyDataType  IntegrationBodyDataType       `db:"body_data_type" json:"body_data_type"`
 	Key           string                        `db:"key" json:"key"`
 	Variable      string                        `db:"variable" json:"variable"`
+	VariableType  IntegrationVariableType       `db:"variable_type" json:"variable_type"`
 }
 
 type IntegrationAlias struct {
@@ -196,18 +206,4 @@ func (value *IntegrationExtractValue) String() string {
 	builder.WriteString(" from " + value.Key + " as " + value.Variable)
 
 	return builder.String()
-}
-
-func FillIntegration(d Store, inventory *Integration) (err error) {
-	if inventory.AuthSecretID != nil {
-		inventory.AuthSecret, err = d.GetAccessKey(inventory.ProjectID, *inventory.AuthSecretID)
-	}
-
-	if err != nil {
-		return
-	}
-
-	err = inventory.AuthSecret.DeserializeSecret()
-
-	return
 }

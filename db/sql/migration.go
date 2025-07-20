@@ -45,10 +45,15 @@ func getVersionErrPath(version db.Migration) string {
 
 // getVersionSQL takes a path to an SQL file and returns it from embed.FS
 // a slice of strings separated by newlines
-func getVersionSQL(name string) (queries []string) {
+func getVersionSQL(name string, ignoreErrors bool) (queries []string) {
 	sql, err := dbAssets.ReadFile(path.Join("migrations", name))
 	if err != nil {
-		panic(err)
+		if ignoreErrors {
+			log.WithError(err).Warnf("migration %s not found", name)
+			return nil
+		} else {
+			panic(err)
+		}
 	}
 	queries = strings.Split(strings.ReplaceAll(string(sql), ";\r\n", ";\n"), ";\n")
 	for i := range queries {
@@ -63,7 +68,7 @@ func (d *SqlDb) prepareMigration(query string) []string {
 	query, _ = nonPrintableRE.Replace(query, " ", -1, -1)
 	var queries []string
 
-	switch dialect := d.sql.Dialect.(type) {
+	switch dialect := d.Sql().Dialect.(type) {
 	case gorp.MySQLDialect:
 		queries = append(queries, prepareMySQLMigration(query))
 	case gorp.OracleDialect:

@@ -13,6 +13,7 @@ api/public/**/*
 /config.runner.key
 /.dredd/config.json
 /database.boltdb
+/database.sqlite
 /database.boltdb.lock
 /database_test.boltdb
 .DS_Store
@@ -34,3 +35,11 @@ __debug_bin*
 .task/
 /web/.env
 /.venv/
+
+/events.log
+/tasks.log
+/task_results.log
+/pro_impl/
+/go.work.x
+/go.work
+/go.work.sum

@@ -17,29 +17,37 @@ import (
 )
 
 type LocalJob struct {
-	// Received constant fields
 	Task        db.Task
 	Template    db.Template
 	Inventory   db.Inventory
 	Repository  db.Repository
 	Environment db.Environment
-	Secret      string
-	Logger      task_logger.Logger
+	Secret      string             // Secret contains secrets received from Survey variables
+	Logger      task_logger.Logger // Logger allows to send logs and status to the server
 
 	App db_lib.LocalApp
 
-	// Internal field
+	killed  bool // killed means that API request to stop the job has been received
 	Process *os.Process
 
 	sshKeyInstallation     db.AccessKeyInstallation
 	becomeKeyInstallation  db.AccessKeyInstallation
 	vaultFileInstallations map[string]db.AccessKeyInstallation
+
+	KeyInstaller db_lib.AccessKeyInstaller
+}
+
+func (t *LocalJob) IsKilled() bool {
+	return t.killed
 }
 
 func (t *LocalJob) Kill() {
+	t.killed = true
+
 	if t.Process == nil {
 		return
 	}
+
 	err := t.Process.Kill()
 	if err != nil {
 		t.Log(err.Error())
@@ -58,9 +66,9 @@ func (t *LocalJob) SetCommit(hash, message string) {
 	t.Logger.SetCommit(hash, message)
 }
 
-func (t *LocalJob) getEnvironmentExtraVars(username string, incomingVersion *string) (extraVars map[string]interface{}, err error) {
+func (t *LocalJob) getEnvironmentExtraVars(username string, incomingVersion *string) (extraVars map[string]any, err error) {
 
-	extraVars = make(map[string]interface{})
+	extraVars = make(map[string]any)
 
 	if t.Environment.JSON != "" {
 		err = json.Unmarshal([]byte(t.Environment.JSON), &extraVars)
@@ -69,7 +77,7 @@ func (t *LocalJob) getEnvironmentExtraVars(username string, incomingVersion *str
 		}
 	}
 
-	taskDetails := make(map[string]interface{})
+	taskDetails := make(map[string]any)
 
 	taskDetails["id"] = t.Task.ID
 
@@ -90,7 +98,7 @@ func (t *LocalJob) getEnvironmentExtraVars(username string, incomingVersion *str
 		}
 	}
 
-	vars := make(map[string]interface{})
+	vars := make(map[string]any)
 	vars["task_details"] = taskDetails
 	extraVars["semaphore_vars"] = vars
 
@@ -98,8 +106,8 @@ func (t *LocalJob) getEnvironmentExtraVars(username string, incomingVersion *str
 }
 
 func (t *LocalJob) getEnvironmentExtraVarsJSON(username string, incomingVersion *string) (str string, err error) {
-	extraVars := make(map[string]interface{})
-	extraSecretVars := make(map[string]interface{})
+	extraVars := make(map[string]any)
+	extraSecretVars := make(map[string]any)
 
 	if t.Environment.JSON != "" {
 		err = json.Unmarshal([]byte(t.Environment.JSON), &extraVars)
@@ -117,7 +125,7 @@ func (t *LocalJob) getEnvironmentExtraVarsJSON(username string, incomingVersion 
 
 	maps.Copy(extraVars, extraSecretVars)
 
-	taskDetails := make(map[string]interface{})
+	taskDetails := make(map[string]any)
 
 	taskDetails["id"] = t.Task.ID
 
@@ -138,7 +146,7 @@ func (t *LocalJob) getEnvironmentExtraVarsJSON(username string, incomingVersion 
 		}
 	}
 
-	vars := make(map[string]interface{})
+	vars := make(map[string]any)
 	vars["task_details"] = taskDetails
 	extraVars["semaphore_vars"] = vars
 
@@ -232,7 +240,7 @@ func (t *LocalJob) getTerraformArgs(username string, incomingVersion *string) (a
 	}
 
 	var params db.TerraformTaskParams
-	err = t.Task.FillParams(&params)
+	err = t.Task.ExtractParams(&params)
 	if err != nil {
 		return
 	}
@@ -344,13 +352,21 @@ func (t *LocalJob) getPlaybookArgs(username string, incomingVersion *string) (ar
 
 	var params db.AnsibleTaskParams
 
-	err = t.Task.FillParams(&params)
+	err = t.Task.ExtractParams(&params)
 	if err != nil {
 		return
 	}
 
 	if tplParams.AllowDebug && params.Debug {
-		args = append(args, "-vvvv")
+		if params.DebugLevel < 1 {
+			params.DebugLevel = 4
+		}
+
+		if params.DebugLevel > 6 {
+			params.DebugLevel = 6
+		}
+
+		args = append(args, "-"+strings.Repeat("v", params.DebugLevel))
 	}
 
 	if params.Diff {
@@ -393,18 +409,48 @@ func (t *LocalJob) getPlaybookArgs(username string, incomingVersion *string) (ar
 	}
 
 	var limit string
+	var tags string
+	var skipTags string
 
+	// Fill fields from template
 	if len(tplParams.Limit) > 0 {
 		limit = strings.Join(tplParams.Limit, ",")
 	}
 
-	if t.Task.Limit != "" && tplParams.AllowOverrideLimit {
-		t.Log("--limit=" + t.Task.Limit)
-		limit = t.Task.Limit
+	if len(tplParams.Tags) > 0 {
+		tags = strings.Join(tplParams.Tags, ",")
 	}
+
+	if len(tplParams.SkipTags) > 0 {
+		skipTags = strings.Join(tplParams.SkipTags, ",")
+	}
+
+	// Fill fields from task
+
+	if tplParams.AllowOverrideLimit && params.Limit != nil {
+		limit = strings.Join(params.Limit, ",")
+	}
+
+	if tplParams.AllowOverrideTags && params.Tags != nil {
+		tags = strings.Join(params.Tags, ",")
+	}
+
+	if tplParams.AllowOverrideSkipTags && params.SkipTags != nil {
+		skipTags = strings.Join(params.SkipTags, ",")
+	}
+
+	// Add final args
 
 	if limit != "" {
 		templateArgs = append(templateArgs, "--limit="+limit)
+	}
+
+	if tags != "" {
+		templateArgs = append(templateArgs, "--tags="+tags)
+	}
+
+	if skipTags != "" {
+		templateArgs = append(templateArgs, "--skip-tags="+skipTags)
 	}
 
 	args = append(args, templateArgs...)
@@ -417,6 +463,10 @@ func (t *LocalJob) getPlaybookArgs(username string, incomingVersion *string) (ar
 
 	if line, ok := inputMap[db.AccessKeyRoleAnsibleBecomeUser]; ok {
 		inputs["BECOME password"] = line
+	}
+
+	if line, ok := inputMap[db.AccessKeyRoleAnsibleBecomeUser]; ok {
+		inputs["SUDO password"] = line
 	}
 
 	return
@@ -443,17 +493,32 @@ func (t *LocalJob) getCLIArgs() (templateArgs []string, taskArgs []string, err e
 	return
 }
 
-func (t *LocalJob) getParams() (params interface{}, err error) {
+func (t *LocalJob) getTemplateParams() (any, error) {
+	var params any
+	switch t.Template.App {
+	case db.AppAnsible:
+		params = &db.AnsibleTemplateParams{}
+	case db.AppTerraform, db.AppTofu, db.AppTerragrunt:
+		params = &db.TerraformTemplateParams{}
+	default:
+		return nil, nil
+	}
+
+	err := t.Template.FillParams(params)
+	return params, err
+}
+
+func (t *LocalJob) getParams() (params any, err error) {
 	switch t.Template.App {
 	case db.AppAnsible:
 		params = &db.AnsibleTaskParams{}
-	case db.AppTerraform, db.AppTofu:
+	case db.AppTerraform, db.AppTofu, db.AppTerragrunt:
 		params = &db.TerraformTaskParams{}
 	default:
 		params = &db.DefaultTaskParams{}
 	}
 
-	err = t.Task.FillParams(params)
+	err = t.Task.ExtractParams(params)
 
 	if err != nil {
 		return
@@ -467,11 +532,17 @@ func (t *LocalJob) Run(username string, incomingVersion *string, alias string) (
 	defer func() {
 		t.destroyKeys()
 		t.destroyInventoryFile()
+		t.App.Clear()
 	}()
 
 	t.SetStatus(task_logger.TaskRunningStatus) // It is required for local mode. Don't delete
 
 	environmentVariables, err := t.getEnvironmentENV()
+	if err != nil {
+		return
+	}
+
+	tplParams, err := t.getTemplateParams()
 	if err != nil {
 		return
 	}
@@ -485,7 +556,13 @@ func (t *LocalJob) Run(username string, incomingVersion *string, alias string) (
 		environmentVariables = append(environmentVariables, "TF_HTTP_ADDRESS="+util.GetPublicAliasURL("terraform", alias))
 	}
 
-	err = t.prepareRun(environmentVariables, params)
+	err = t.prepareRun(db_lib.LocalAppInstallingArgs{
+		EnvironmentVars: environmentVariables,
+		TplParams:       tplParams,
+		Params:          params,
+		Installer:       t.KeyInstaller,
+	})
+
 	if err != nil {
 		return err
 	}
@@ -496,7 +573,7 @@ func (t *LocalJob) Run(username string, incomingVersion *string, alias string) (
 	switch t.Template.App {
 	case db.AppAnsible:
 		args, inputs, err = t.getPlaybookArgs(username, incomingVersion)
-	case db.AppTerraform, db.AppTofu:
+	case db.AppTerraform, db.AppTofu, db.AppTerragrunt:
 		args, err = t.getTerraformArgs(username, incomingVersion)
 	default:
 		args, err = t.getShellArgs(username, incomingVersion)
@@ -527,11 +604,17 @@ func (t *LocalJob) Run(username string, incomingVersion *string, alias string) (
 		}
 	}
 
+	if t.killed {
+		t.SetStatus(task_logger.TaskStoppedStatus)
+		return nil
+	}
+
 	return t.App.Run(db_lib.LocalAppRunningArgs{
 		CliArgs:         args,
 		EnvironmentVars: environmentVariables,
 		Inputs:          inputs,
 		TaskParams:      params,
+		TemplateParams:  tplParams,
 		Callback: func(p *os.Process) {
 			t.Process = p
 		},
@@ -539,11 +622,11 @@ func (t *LocalJob) Run(username string, incomingVersion *string, alias string) (
 
 }
 
-func (t *LocalJob) prepareRun(environmentVars []string, params interface{}) error {
+func (t *LocalJob) prepareRun(installingArgs db_lib.LocalAppInstallingArgs) error {
 
 	t.Log("Preparing: " + strconv.Itoa(t.Task.ID))
 
-	if err := checkTmpDir(util.Config.TmpPath); err != nil {
+	if err := checkTmpDir(util.Config.GetProjectTmpDir(t.Template.ProjectID)); err != nil {
 		t.Log("Creating tmp dir failed: " + err.Error())
 		return err
 	}
@@ -579,8 +662,8 @@ func (t *LocalJob) prepareRun(environmentVars []string, params interface{}) erro
 		return err
 	}
 
-	if err := t.App.InstallRequirements(environmentVars, params); err != nil {
-		t.Log("Running galaxy failed: " + err.Error())
+	if err := t.App.InstallRequirements(installingArgs); err != nil {
+		t.Log("Failed to install requirements: " + err.Error())
 		return err
 	}
 
@@ -597,7 +680,7 @@ func (t *LocalJob) updateRepository() error {
 		Logger:     t.Logger,
 		TemplateID: t.Template.ID,
 		Repository: t.Repository,
-		Client:     db_lib.CreateDefaultGitClient(),
+		Client:     db_lib.CreateDefaultGitClient(t.KeyInstaller),
 	}
 
 	err := repo.ValidateRepo()
@@ -633,7 +716,7 @@ func (t *LocalJob) checkoutRepository() error {
 		Logger:     t.Logger,
 		TemplateID: t.Template.ID,
 		Repository: t.Repository,
-		Client:     db_lib.CreateDefaultGitClient(),
+		Client:     db_lib.CreateDefaultGitClient(t.KeyInstaller),
 	}
 
 	err := repo.ValidateRepo()
@@ -655,7 +738,11 @@ func (t *LocalJob) checkoutRepository() error {
 		return err
 	}
 
-	commitMessage, _ := repo.GetLastCommitMessage()
+	commitMessage, err := repo.GetLastCommitMessage()
+
+	if err != nil {
+		t.Log(err.Error())
+	}
 
 	t.SetCommit(commitHash, commitMessage)
 
@@ -679,7 +766,7 @@ func (t *LocalJob) installVaultKeyFiles() (err error) {
 
 		var install db.AccessKeyInstallation
 		if vault.Type == db.TemplateVaultPassword {
-			install, err = vault.Vault.Install(db.AccessKeyRoleAnsiblePasswordVault, t.Logger)
+			install, err = t.KeyInstaller.Install(*vault.Vault, db.AccessKeyRoleAnsiblePasswordVault, t.Logger)
 			if err != nil {
 				return
 			}

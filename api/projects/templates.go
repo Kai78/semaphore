@@ -5,16 +5,14 @@ import (
 	"github.com/semaphoreui/semaphore/util"
 	"net/http"
 
-	"github.com/gorilla/context"
 	"github.com/semaphoreui/semaphore/api/helpers"
 	"github.com/semaphoreui/semaphore/db"
-	log "github.com/sirupsen/logrus"
 )
 
 // TemplatesMiddleware ensures a template exists and loads it to the context
 func TemplatesMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		project := context.Get(r, "project").(db.Project)
+		project := helpers.GetFromContext(r, "project").(db.Project)
 		templateID, err := helpers.GetIntParam("template_id", w, r)
 		if err != nil {
 			return
@@ -27,19 +25,19 @@ func TemplatesMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		context.Set(r, "template", template)
+		r = helpers.SetContextValue(r, "template", template)
 		next.ServeHTTP(w, r)
 	})
 }
 
 // GetTemplate returns single template by ID
 func GetTemplate(w http.ResponseWriter, r *http.Request) {
-	template := context.Get(r, "template").(db.Template)
+	template := helpers.GetFromContext(r, "template").(db.Template)
 	helpers.WriteJSON(w, http.StatusOK, template)
 }
 
 func GetTemplateRefs(w http.ResponseWriter, r *http.Request) {
-	tpl := context.Get(r, "template").(db.Template)
+	tpl := helpers.GetFromContext(r, "template").(db.Template)
 	refs, err := helpers.Store(r).GetTemplateRefs(tpl.ProjectID, tpl.ID)
 	if err != nil {
 		helpers.WriteError(w, err)
@@ -51,7 +49,7 @@ func GetTemplateRefs(w http.ResponseWriter, r *http.Request) {
 
 // GetTemplates returns all templates for a project in a sort order
 func GetTemplates(w http.ResponseWriter, r *http.Request) {
-	project := context.Get(r, "project").(db.Project)
+	project := helpers.GetFromContext(r, "project").(db.Project)
 	filter := db.TemplateFilter{}
 	if r.URL.Query().Get("app") != "" {
 		app := db.TemplateApp(r.URL.Query().Get("app"))
@@ -69,7 +67,7 @@ func GetTemplates(w http.ResponseWriter, r *http.Request) {
 
 // AddTemplate adds a template to the database
 func AddTemplate(w http.ResponseWriter, r *http.Request) {
-	project := context.Get(r, "project").(db.Project)
+	project := helpers.GetFromContext(r, "project").(db.Project)
 
 	var template db.Template
 	if !helpers.Bind(w, r, &template) {
@@ -149,9 +147,37 @@ func AddTemplate(w http.ResponseWriter, r *http.Request) {
 	helpers.WriteJSON(w, http.StatusCreated, newTemplate)
 }
 
+func UpdateTemplateDescription(w http.ResponseWriter, r *http.Request) {
+	template := helpers.GetFromContext(r, "template").(db.Template)
+
+	var tpl struct {
+		Description string `json:"description"`
+	}
+
+	if !helpers.Bind(w, r, &tpl) {
+		return
+	}
+
+	err := helpers.Store(r).SetTemplateDescription(template.ProjectID, template.ID, tpl.Description)
+	if err != nil {
+		helpers.WriteError(w, err)
+		return
+	}
+
+	helpers.EventLog(r, helpers.EventLogUpdate, helpers.EventLogItem{
+		UserID:      helpers.UserFromContext(r).ID,
+		ProjectID:   template.ProjectID,
+		ObjectType:  db.EventTemplate,
+		ObjectID:    template.ID,
+		Description: fmt.Sprintf("Template ID %d description updated", template.ID),
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // UpdateTemplate writes a template to an existing key in the database
 func UpdateTemplate(w http.ResponseWriter, r *http.Request) {
-	oldTemplate := context.Get(r, "template").(db.Template)
+	oldTemplate := helpers.GetFromContext(r, "template").(db.Template)
 
 	var template db.Template
 	if !helpers.Bind(w, r, &template) {
@@ -205,16 +231,12 @@ func UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		Description: fmt.Sprintf("Template ID %d updated", template.ID),
 	})
 
-	if err != nil {
-		log.Error(err)
-	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // RemoveTemplate deletes a template from the database
 func RemoveTemplate(w http.ResponseWriter, r *http.Request) {
-	tpl := context.Get(r, "template").(db.Template)
+	tpl := helpers.GetFromContext(r, "template").(db.Template)
 
 	err := helpers.Store(r).DeleteTemplate(tpl.ProjectID, tpl.ID)
 	if err != nil {
@@ -234,8 +256,8 @@ func RemoveTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func SetTemplateInventory(w http.ResponseWriter, r *http.Request) {
-	tpl := context.Get(r, "template").(db.Template)
-	inv := context.Get(r, "inventory").(db.Inventory)
+	tpl := helpers.GetFromContext(r, "template").(db.Template)
+	inv := helpers.GetFromContext(r, "inventory").(db.Inventory)
 
 	if !tpl.App.HasInventoryType(inv.Type) {
 		helpers.WriteErrorStatus(w, "Inventory type is not supported for this template", http.StatusBadRequest)
@@ -258,8 +280,8 @@ func SetTemplateInventory(w http.ResponseWriter, r *http.Request) {
 }
 
 func AttachInventory(w http.ResponseWriter, r *http.Request) {
-	tpl := context.Get(r, "template").(db.Template)
-	inv := context.Get(r, "inventory").(db.Inventory)
+	tpl := helpers.GetFromContext(r, "template").(db.Template)
+	inv := helpers.GetFromContext(r, "inventory").(db.Inventory)
 
 	if inv.TemplateID != nil {
 		helpers.WriteErrorStatus(w, "Inventory is already attached to another template", http.StatusBadRequest)
@@ -282,8 +304,8 @@ func AttachInventory(w http.ResponseWriter, r *http.Request) {
 }
 
 func DetachInventory(w http.ResponseWriter, r *http.Request) {
-	tpl := context.Get(r, "template").(db.Template)
-	inv := context.Get(r, "inventory").(db.Inventory)
+	tpl := helpers.GetFromContext(r, "template").(db.Template)
+	inv := helpers.GetFromContext(r, "inventory").(db.Inventory)
 
 	if inv.TemplateID == nil || *inv.TemplateID != tpl.ID {
 		helpers.WriteErrorStatus(w, "Inventory is not attached to this template", http.StatusBadRequest)

@@ -15,6 +15,7 @@
           @error="onError"
           :need-save="needSave"
           :need-reset="needReset"
+          :timezone="systemInfo.schedule_timezone"
         />
       </template>
     </EditDialog>
@@ -79,6 +80,9 @@
           </router-link>
         </div>
       </template>
+      <template v-slot:item.cron_format="{ item }">
+        <code>{{ item.cron_format }}</code>
+      </template>
 
       <template v-slot:item.actions="{ item }">
         <v-btn-toggle dense :value-comparator="() => false">
@@ -117,6 +121,9 @@ import axios from 'axios';
 export default {
   components: { TaskList, ScheduleForm },
   mixins: [ItemListPageBase],
+  props: {
+    systemInfo: Object,
+  },
   data() {
     return {
       openedItems: [],
