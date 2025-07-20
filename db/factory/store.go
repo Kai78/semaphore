@@ -18,8 +18,13 @@ func CreateStore() db.Store {
 	case util.DbDriverBolt:
 		return bolt.CreateBoltDB()
 	case util.DbDriverPostgres:
-		return &sql.SqlDb{}
+		return sql.CreateDb(config.Dialect)
+	case util.DbDriverOracle:
+		return sql.CreateDb(config.Dialect)
+	case util.DbDriverSQLite:
+		return sql.CreateDb(config.Dialect)
 	default:
+		//sql.CreateDb(config.Dialect) // This will panic if the dialect is unsupported
 		panic("Unsupported database dialect: " + config.Dialect)
 	}
 }

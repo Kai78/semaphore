@@ -4,9 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/semaphoreui/semaphore/db"
-
 	"github.com/go-gorp/gorp/v3"
+	"github.com/semaphoreui/semaphore/db"
 	"github.com/semaphoreui/semaphore/util"
 )
 
@@ -81,5 +80,5 @@ func TestOracleConnection(t *testing.T) {
 	store := SqlDb{}
 
 	store.Connect("KAI3")
-	db.Migrate(&store)
+	db.Migrate(&store, nil)
 }

@@ -314,11 +314,12 @@ create table ` + "`migrations`" + ` (
 var dbAssets embed.FS
 
 func CreateDb(dialect string) *SqlDb {
-	return &SqlDb{
+	sqlDb := &SqlDb{
 		connection: SqlDbConnection{
 			dialect: dialect,
 		},
 	}
+	return sqlDb
 }
 
 func (d *SqlDbConnection) GetDialect() string {
@@ -758,9 +759,9 @@ func (d *SqlDb) GetObject(props db.ObjectProps, ID int) (object any, err error) 
 func (d *SqlDb) CreateObject(props db.ObjectProps, object any) (newObject any, err error) {
 	// err = newObject.Validate()
 
-	if err != nil {
-		return
-	}
+	// if err != nil {
+	// 	return
+	// }
 
 	template, args := InsertTemplateFromType(newObject)
 	insertID, err := d.insert(
